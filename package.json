@@ -1,0 +1,14 @@
+{
+  "name": "TLS-Fingerprint-API",
+  "version": "1.0.0",
+  "main": "index.js",
+  "type": "module",
+  "repository": "git@github.com:nicoandmee/TLS-Fingerprint-API.git",
+  "author": "Nico Kokonas <nico@nicomee.com> (https://nicomee.com/)",
+  "license": "MIT",
+  "dependencies": {
+    "got": "^12.1.0",
+    "hpagent": "^1.0.0",
+    "ws": "^8.7.0"
+  }
+}

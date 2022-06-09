@@ -7,11 +7,12 @@ require (
 	github.com/Carcraftz/fhttp v0.0.0-20210902023210-28df3f3a12b5
 	github.com/Carcraftz/utls v0.0.0-20210907185630-32782f880d54
 	github.com/andybalholm/brotli v1.0.3
+	github.com/fatih/color v1.13.0
+	github.com/gorilla/websocket v1.5.0
 )
 
 require (
 	github.com/dsnet/compress v0.0.1 // indirect
-	github.com/fatih/color v1.13.0 // indirect
 	github.com/mattn/go-colorable v0.1.9 // indirect
 	github.com/mattn/go-isatty v0.0.14 // indirect
 	gitlab.com/yawning/bsaes.git v0.0.0-20190805113838-0a714cd429ec // indirect
@@ -21,3 +22,5 @@ require (
 	golang.org/x/sys v0.0.0-20210630005230-0f9fa26af87c // indirect
 	golang.org/x/text v0.3.6 // indirect
 )
+
+replace github.com/gorilla/websocket v1.5.0 => /home/nico/code/websocket
