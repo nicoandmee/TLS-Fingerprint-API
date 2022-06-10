@@ -109,7 +109,7 @@ func NewProxy() *WebsocketProxy {
 
 			// Example TLS handshake
 			serverName := addr[:strings.IndexByte(addr, ':')]
-			fmt.Println(serverName)
+			fmt.Println("Server Name: " + serverName)
 			tlsConn := tls.UClient(netConn, &tls.Config{ServerName: serverName, InsecureSkipVerify: true}, tls.HelloChrome_Auto)
 			if err = tlsConn.Handshake(); err != nil {
 				return nil, err
@@ -142,15 +142,73 @@ func (w *WebsocketProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		dialer = DefaultDialer
 	}
 
+	//master header order, all your headers will be ordered based on this list and anything extra will be appended to the end
+	//if your site has any custom headers, see the header order chrome uses and then add those headers to this list
+	masterheaderorder := []string{
+		"host",
+		"connection",
+		"cache-control",
+		"device-memory",
+		"viewport-width",
+		"rtt",
+		"downlink",
+		"ect",
+		"sec-ch-ua",
+		"sec-ch-ua-mobile",
+		"sec-ch-ua-full-version",
+		"sec-ch-ua-arch",
+		"sec-ch-ua-platform",
+		"sec-ch-ua-platform-version",
+		"sec-ch-ua-model",
+		"upgrade-insecure-requests",
+		"user-agent",
+		"accept",
+		"sec-fetch-site",
+		"sec-fetch-mode",
+		"sec-fetch-user",
+		"sec-fetch-dest",
+		"referer",
+		"accept-encoding",
+		"accept-language",
+		"cookie",
+	}
+	headermap := make(map[string]string)
+	//TODO: REDUCE TIME COMPLEXITY (This code is very bad)
+	headerorderkey := []string{}
+	for _, key := range masterheaderorder {
+		for k, v := range req.Header {
+			lowercasekey := strings.ToLower(k)
+			if key == lowercasekey {
+				headermap[k] = v[0]
+				headerorderkey = append(headerorderkey, lowercasekey)
+			}
+		}
+
+	}
+	for k, v := range req.Header {
+		if _, ok := headermap[k]; !ok {
+			headermap[k] = v[0]
+			headerorderkey = append(headerorderkey, strings.ToLower(k))
+		}
+	}
+
 	// Pass headers from the incoming request to the dialer to forward them to
 	// the final destinations.
-	requestHeader := http.Header{}
+	requestHeader := http.Header{
+		http.HeaderOrderKey:  headerorderkey,
+		http.PHeaderOrderKey: {":method", ":authority", ":scheme", ":path"},
+	}
+
 	for _, prot := range req.Header[http.CanonicalHeaderKey("Sec-WebSocket-Protocol")] {
 		requestHeader.Add("Sec-WebSocket-Protocol", prot)
 	}
 	for _, cookie := range req.Header[http.CanonicalHeaderKey("Cookie")] {
 		requestHeader.Add("Cookie", cookie)
 	}
+	for _, cookie := range req.Header[http.CanonicalHeaderKey("User-Agent")] {
+		requestHeader.Add("User-Agent", cookie)
+	}
+	requestHeader.Set("Host", backendURL.Host)
 
 	// Enable the director to copy any additional headers it desires for
 	// forwarding to the remote server.
@@ -165,7 +223,7 @@ func (w *WebsocketProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	// optional:
 	// http://tools.ietf.org/html/draft-ietf-hybi-websocket-multiplexing-01
 
-	fmt.Printf("%# v", pretty.Formatter(requestHeader))
+	fmt.Printf("%# v \n", pretty.Formatter(requestHeader))
 	fmt.Println("Backend URL: " + backendURL.String())
 	connBackend, resp, err := dialer.Dial(backendURL.String(), requestHeader)
 	if err != nil {
