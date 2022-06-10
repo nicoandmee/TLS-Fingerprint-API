@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	http "github.com/Carcraftz/fhttp"
+	httputil "github.com/Carcraftz/fhttp/httputil"
 	tls "github.com/Carcraftz/utls"
 	"github.com/gorilla/websocket"
 	"github.com/kr/pretty"
@@ -54,24 +55,6 @@ type WebsocketProxy struct {
 // request to the given target.
 func ProxyHandler(target *url.URL) http.Handler { return NewProxy() }
 
-func hostPortNoPort(u *url.URL) (hostPort, hostNoPort string) {
-	hostPort = u.Host
-	hostNoPort = u.Host
-	if i := strings.LastIndex(u.Host, ":"); i > strings.LastIndex(u.Host, "]") {
-		hostNoPort = hostNoPort[:i]
-	} else {
-		switch u.Scheme {
-		case "wss":
-			hostPort += ":443"
-		case "https":
-			hostPort += ":443"
-		default:
-			hostPort += ":80"
-		}
-	}
-	return hostPort, hostNoPort
-}
-
 // NewProxy returns a new Websocket reverse proxy that rewrites the
 // URL's to the scheme, host and base path provider in target.
 func NewProxy() *WebsocketProxy {
@@ -79,6 +62,9 @@ func NewProxy() *WebsocketProxy {
 		// Shallow copy
 		pageURL := r.Header.Get("Poptls-Url")
 		fmt.Println("Poptls-Url: " + pageURL)
+
+		// Remove header to ignore later
+		r.Header.Del("Poptls-Url")
 		u, err := url.Parse(pageURL)
 		if err != nil {
 			log.Fatalln(err)
@@ -93,16 +79,17 @@ func NewProxy() *WebsocketProxy {
 	dialer := websocket.Dialer{
 		EnableCompression: true,
 		NetDialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			// Test ja3
 			// TCP dial
 			netConn, err := net.Dial(network, addr)
-			if err != nil {
-				return nil, err
-			}
 
 			// 'NetDialTLSContext' also gets called during the proxy CONNECT for some reason (at this point 'network' equals "TCP" and 'addr' equals "127.0.0.1:8888")
 			// The HTTP proxy doesn't support HTTPS however, so I return the established TCP connection early.
 			// If I don't do this check, the connection hangs forever (tested with several proxies).
 			// This feels kinda hacky though, not sure if this is the correct approach...
+			if err != nil {
+				log.Fatalln(err)
+			}
 			// if p.Host == addr {
 			// 	return netConn, err
 			// }
@@ -110,8 +97,83 @@ func NewProxy() *WebsocketProxy {
 			// Example TLS handshake
 			serverName := addr[:strings.IndexByte(addr, ':')]
 			fmt.Println("Server Name: " + serverName)
-			tlsConn := tls.UClient(netConn, &tls.Config{ServerName: serverName, InsecureSkipVerify: true}, tls.HelloChrome_Auto)
+
+			tlsConn := tls.UClient(netConn, &tls.Config{ServerName: serverName, InsecureSkipVerify: true}, tls.HelloCustom)
+			spec := tls.ClientHelloSpec{
+				CipherSuites: []uint16{
+					tls.GREASE_PLACEHOLDER,
+					tls.TLS_AES_128_GCM_SHA256,
+					tls.TLS_AES_256_GCM_SHA384,
+					tls.TLS_CHACHA20_POLY1305_SHA256,
+					tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+					tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+					tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+					tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+					tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,
+					tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305,
+					tls.TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA,
+					tls.TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA,
+					tls.TLS_RSA_WITH_AES_128_GCM_SHA256,
+					tls.TLS_RSA_WITH_AES_256_GCM_SHA384,
+					tls.TLS_RSA_WITH_AES_128_CBC_SHA,
+					tls.TLS_RSA_WITH_AES_256_CBC_SHA,
+				},
+				CompressionMethods: []byte{
+					0x00, // compressionNone
+				},
+				Extensions: []tls.TLSExtension{
+					&tls.UtlsGREASEExtension{},
+					&tls.SNIExtension{},
+					&tls.UtlsExtendedMasterSecretExtension{},
+					&tls.RenegotiationInfoExtension{Renegotiation: tls.RenegotiateOnceAsClient},
+					&tls.SupportedCurvesExtension{[]tls.CurveID{
+						tls.CurveID(tls.GREASE_PLACEHOLDER),
+						tls.X25519,
+						tls.CurveP256,
+						tls.CurveP384,
+					}},
+					&tls.SupportedPointsExtension{SupportedPoints: []byte{
+						0x00, // pointFormatUncompressed
+					}},
+					&tls.SessionTicketExtension{},
+					&tls.ALPNExtension{AlpnProtocols: []string{"http/1.1"}},
+					&tls.StatusRequestExtension{},
+					&tls.SignatureAlgorithmsExtension{SupportedSignatureAlgorithms: []tls.SignatureScheme{
+						tls.ECDSAWithP256AndSHA256,
+						tls.PSSWithSHA256,
+						tls.PKCS1WithSHA256,
+						tls.ECDSAWithP384AndSHA384,
+						tls.PSSWithSHA384,
+						tls.PKCS1WithSHA384,
+						tls.PSSWithSHA512,
+						tls.PKCS1WithSHA512,
+					}},
+					&tls.SCTExtension{},
+					&tls.KeyShareExtension{[]tls.KeyShare{
+						{Group: tls.CurveID(tls.GREASE_PLACEHOLDER), Data: []byte{0}},
+						{Group: tls.X25519},
+					}},
+					&tls.PSKKeyExchangeModesExtension{[]uint8{
+						tls.PskModeDHE,
+					}},
+					&tls.SupportedVersionsExtension{[]uint16{
+						tls.GREASE_PLACEHOLDER,
+						tls.VersionTLS13,
+						tls.VersionTLS12,
+						tls.VersionTLS11,
+						tls.VersionTLS10,
+					}},
+					&tls.UtlsGREASEExtension{},
+					&tls.UtlsPaddingExtension{GetPaddingLen: tls.BoringPaddingStyle},
+				},
+			}
+			err = tlsConn.ApplyPreset(&spec)
+			if err != nil {
+				log.Fatalln(err)
+			}
+
 			if err = tlsConn.Handshake(); err != nil {
+				tlsConn.Close()
 				return nil, err
 			}
 
@@ -124,6 +186,12 @@ func NewProxy() *WebsocketProxy {
 
 // ServeHTTP implements the http.Handler that proxies WebSocket connections.
 func (w *WebsocketProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
+	reqDump, err := httputil.DumpRequest(req, true)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("Incoming Request:\n%s", string(reqDump))
+
 	if w.Backend == nil {
 		log.Println("websocketproxy: backend function is not defined")
 		http.Error(rw, "internal server error (code: 1)", http.StatusInternalServerError)
@@ -198,16 +266,25 @@ func (w *WebsocketProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		http.HeaderOrderKey:  headerorderkey,
 		http.PHeaderOrderKey: {":method", ":authority", ":scheme", ":path"},
 	}
-
 	for _, prot := range req.Header[http.CanonicalHeaderKey("Sec-WebSocket-Protocol")] {
 		requestHeader.Add("Sec-WebSocket-Protocol", prot)
 	}
 	for _, cookie := range req.Header[http.CanonicalHeaderKey("Cookie")] {
 		requestHeader.Add("Cookie", cookie)
 	}
-	for _, cookie := range req.Header[http.CanonicalHeaderKey("User-Agent")] {
-		requestHeader.Add("User-Agent", cookie)
+	for _, ua := range req.Header[http.CanonicalHeaderKey("User-Agent")] {
+		requestHeader.Add("User-Agent", ua)
 	}
+	for _, al := range req.Header[http.CanonicalHeaderKey("Accept-Language")] {
+		requestHeader.Add("Accept-Language", al)
+	}
+	for _, ae := range req.Header[http.CanonicalHeaderKey("Accept-Encoding")] {
+		requestHeader.Add("Accept-Encoding", ae)
+	}
+	for _, origin := range req.Header[http.CanonicalHeaderKey("Origin")] {
+		requestHeader.Add("Origin", origin)
+	}
+
 	requestHeader.Set("Host", backendURL.Host)
 
 	// Enable the director to copy any additional headers it desires for
@@ -226,12 +303,20 @@ func (w *WebsocketProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	fmt.Printf("%# v \n", pretty.Formatter(requestHeader))
 	fmt.Println("Backend URL: " + backendURL.String())
 	connBackend, resp, err := dialer.Dial(backendURL.String(), requestHeader)
+
 	if err != nil {
 		log.Printf("websocketproxy: couldn't dial to remote backend url %s", err)
 		if resp != nil {
 			// If the WebSocket handshake fails, ErrBadHandshake is returned
 			// along with a non-nil *http.Response so that callers can handle
 			// redirects, authentication, etcetera.
+			respDump, err := httputil.DumpResponse(resp, true)
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			fmt.Printf("Backend Response:\n%s", string(respDump))
+
 			if err := copyResponse(rw, resp); err != nil {
 				log.Printf("websocketproxy: couldn't write response after failed remote backend handshake: %s", err)
 			}
